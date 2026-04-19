@@ -2,10 +2,10 @@ import SwiftUI
 import Photos
 import AVFoundation
 
-struct ZoomablePhotoView: View {
+struct PhotoPageContent: View {
     let asset: PHAsset
+    var isActive: Bool
     @Binding var zoomScale: CGFloat
-    var isActive: Bool = true
     var onSingleTap: () -> Void = {}
 
     @State private var image: UIImage?
@@ -22,10 +22,16 @@ struct ZoomablePhotoView: View {
     @State private var baseOffset: CGSize = .zero
 
     @AppStorage("pixelArtCrispThreshold") private var pixelArtCrispThreshold: Int = 256
+    @AppStorage("fullResIndicatorStyle") private var fullResIndicatorStyle: String = "off"
 
     private var isCrisp: Bool {
         pixelArtCrispThreshold > 0 &&
             max(asset.pixelWidth, asset.pixelHeight) <= pixelArtCrispThreshold
+    }
+
+    private var isFullResolution: Bool {
+        guard let image, let cg = image.cgImage else { return false }
+        return max(cg.width, cg.height) >= max(asset.pixelWidth, asset.pixelHeight)
     }
 
     var body: some View {
@@ -60,17 +66,23 @@ struct ZoomablePhotoView: View {
                         .padding(.bottom, 8)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                if isFullResolution && fullResIndicatorStyle == "lightGraySquare" {
+                    Rectangle()
+                        .fill(Color(white: 0.75))
+                        .frame(width: 8, height: 8)
+                        .padding(.top, 58)
+                        .padding(.trailing, 14)
+                }
+            }
         }
         .ignoresSafeArea()
         .task(id: asset.localIdentifier) {
-            await loadImage()
+            await loadInitialMedia()
         }
-        .onChange(of: asset.localIdentifier) { _, _ in
-            resetTransform()
-            image = nil
-            livePhoto = nil
-            isPlayingLive = false
-            cleanupPlayer()
+        .task(id: FullResKey(assetID: asset.localIdentifier, wantsFullRes: isActive && zoomScale > 1.0)) {
+            guard isActive, zoomScale > 1.0, !isFullResolution, !isCrisp else { return }
+            await loadFullResolutionImage()
         }
         .onChange(of: isActive) { _, newValue in
             if !newValue {
@@ -81,6 +93,11 @@ struct ZoomablePhotoView: View {
         .onDisappear {
             cleanupPlayer()
         }
+    }
+
+    private struct FullResKey: Hashable {
+        let assetID: String
+        let wantsFullRes: Bool
     }
 
     @ViewBuilder
@@ -242,13 +259,6 @@ struct ZoomablePhotoView: View {
         }
     }
 
-    private func resetTransform() {
-        zoomScale = 1.0
-        baseScale = 1.0
-        offset = .zero
-        baseOffset = .zero
-    }
-
     private func toggleVideoPlayback() {
         guard let player else { return }
         if isPlayingVideo {
@@ -295,7 +305,7 @@ struct ZoomablePhotoView: View {
         videoDuration = 0
     }
 
-    private func loadImage() async {
+    private func loadInitialMedia() async {
         switch asset.playbackStyle {
         case .imageAnimated:
             await loadAnimatedImage()
@@ -308,112 +318,68 @@ struct ZoomablePhotoView: View {
         }
     }
 
-    private func loadLivePhoto() async {
-        let assetCopy = asset
-        let stream = AsyncStream<PHLivePhoto?> { continuation in
-            let options = PHLivePhotoRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            PHImageManager.default().requestLivePhoto(
-                for: assetCopy,
-                targetSize: PHImageManagerMaximumSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { @Sendable result, info in
-                continuation.yield(result)
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !isDegraded {
-                    continuation.finish()
-                }
-            }
-        }
-        for await result in stream {
-            if let result { self.livePhoto = result }
-        }
-        if livePhoto == nil {
-            await loadStillImage()
-        }
-    }
-
-    private static func normalizedToSRGB(_ image: UIImage) -> UIImage? {
-        guard let cg = image.cgImage else { return nil }
-        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-        let width = cg.width
-        let height = cg.height
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: srgb,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        context.interpolationQuality = .none
-        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let out = context.makeImage() else { return nil }
-        return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
-    }
-
     private func loadStillImage() async {
-        let assetCopy = asset
-        let data: Data? = await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            options.version = .original
-            PHImageManager.default().requestImageDataAndOrientation(for: assetCopy, options: options) { @Sendable data, _, _, _ in
-                continuation.resume(returning: data)
-            }
+        if isCrisp {
+            await loadCrispStillImage()
+        } else {
+            await loadDisplayStillImage()
         }
-        if let data, let img = UIImage(data: data) {
-            if isCrisp, let normalized = Self.normalizedToSRGB(img) {
+    }
+
+    private func loadDisplayStillImage() async {
+        for await result in ImageService.shared.requestDisplayImage(for: asset) {
+            if Task.isCancelled { return }
+            self.image = result
+        }
+    }
+
+    private func loadCrispStillImage() async {
+        for await data in ImageService.shared.requestOriginalData(for: asset) {
+            if Task.isCancelled { return }
+            guard let img = UIImage(data: data) else { continue }
+            if Task.isCancelled { return }
+            if let normalized = Self.normalizedToSRGB(img) {
                 self.image = normalized
             } else {
                 self.image = img
             }
-            return
         }
-        let stream = AsyncStream<UIImage?> { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .opportunistic
-            options.isNetworkAccessAllowed = true
-            options.resizeMode = .exact
-            PHImageManager.default().requestImage(
-                for: assetCopy,
-                targetSize: PHImageManagerMaximumSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { @Sendable result, info in
-                continuation.yield(result)
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if !isDegraded {
-                    continuation.finish()
-                }
-            }
+    }
+
+    private func loadFullResolutionImage() async {
+        for await result in ImageService.shared.requestFullResolutionImage(for: asset) {
+            if Task.isCancelled { return }
+            self.image = result
         }
-        for await result in stream {
-            if let result { self.image = result }
+    }
+
+    private func loadLivePhoto() async {
+        var got: PHLivePhoto?
+        for await result in ImageService.shared.requestLivePhoto(for: asset) {
+            if Task.isCancelled { return }
+            got = result
+            self.livePhoto = result
+        }
+        if Task.isCancelled { return }
+        if got == nil {
+            await loadStillImage()
         }
     }
 
     private func loadAnimatedImage() async {
-        let assetCopy = asset
-        let data: Data? = await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            PHImageManager.default().requestImageDataAndOrientation(for: assetCopy, options: options) { @Sendable data, _, _, _ in
-                continuation.resume(returning: data)
-            }
+        var gotData: Data?
+        for await data in ImageService.shared.requestOriginalData(for: asset) {
+            if Task.isCancelled { return }
+            gotData = data
         }
-        guard let data else {
+        guard let data = gotData else {
             await loadStillImage()
             return
         }
         let decoded = await Task.detached(priority: .userInitiated) {
             GIFDecoder.decode(data: data)
         }.value
+        if Task.isCancelled { return }
         if let decoded {
             self.image = decoded
         } else {
@@ -422,20 +388,12 @@ struct ZoomablePhotoView: View {
     }
 
     private func loadVideo() async {
-        let assetCopy = asset
-        let options = PHVideoRequestOptions()
-        options.isNetworkAccessAllowed = true
-        options.deliveryMode = .automatic
-
-        let item: AVPlayerItem? = await withCheckedContinuation { continuation in
-            var resumed = false
-            PHImageManager.default().requestPlayerItem(forVideo: assetCopy, options: options) { @Sendable playerItem, _ in
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(returning: playerItem)
-            }
+        var gotItem: AVPlayerItem?
+        for await item in ImageService.shared.requestPlayerItem(for: asset) {
+            if Task.isCancelled { return }
+            gotItem = item
         }
-        guard let item else { return }
+        guard let item = gotItem else { return }
 
         let newPlayer = AVPlayer(playerItem: item)
         self.player = newPlayer
@@ -471,5 +429,25 @@ struct ZoomablePhotoView: View {
             }
         }
         self.endObserver = end
+    }
+
+    private static func normalizedToSRGB(_ image: UIImage) -> UIImage? {
+        guard let cg = image.cgImage else { return nil }
+        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let width = cg.width
+        let height = cg.height
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: srgb,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .none
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let out = context.makeImage() else { return nil }
+        return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
     }
 }

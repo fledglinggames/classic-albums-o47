@@ -23,28 +23,23 @@ struct PhotoViewerView: View {
     @State private var resizeTargetAsset: PHAsset?
     @State private var showingResizeUnsupported = false
 
+    @State private var cachedAssets: [PHAsset] = []
+    @State private var cachedFetchID: ObjectIdentifier?
+
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
 
-            TabView(selection: $selectedIndex) {
-                ForEach(0..<assets.count, id: \.self) { idx in
-                    ZoomablePhotoView(
-                        asset: assets.object(at: idx),
+            Group {
+                if !cachedAssets.isEmpty {
+                    PhotoViewerPagedView(
+                        assets: cachedAssets,
+                        selectedIndex: $selectedIndex,
                         zoomScale: $zoomScale,
-                        isActive: idx == selectedIndex,
-                        onSingleTap: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showChrome.toggle()
-                                if !showChrome { showInfoPanel = false }
-                            }
-                        }
+                        onSingleTap: { toggleChrome() }
                     )
-                    .tag(idx)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .indexViewStyle(.page(backgroundDisplayMode: .never))
             .ignoresSafeArea()
             .offset(y: dismissDragOffset.height)
             .opacity(dismissOpacity)
@@ -83,6 +78,13 @@ struct PhotoViewerView: View {
             }
         }
         .statusBarHidden(!showChrome)
+        .task(id: ObjectIdentifier(assets)) {
+            let newID = ObjectIdentifier(assets)
+            guard newID != cachedFetchID else { return }
+            cachedAssets = Self.buildAssetList(assets: assets)
+            cachedFetchID = newID
+            refreshCurrentAsset()
+        }
         .onAppear {
             refreshCurrentAsset()
             setOrientation(mask: [.portrait, .landscapeLeft, .landscapeRight])
@@ -167,15 +169,43 @@ struct PhotoViewerView: View {
     }
 
     private func refreshCurrentAsset() {
-        guard selectedIndex >= 0, selectedIndex < assets.count else {
+        guard selectedIndex >= 0 else {
             currentAsset = nil
             currentIsFavorite = false
             return
         }
-        let id = assets.object(at: selectedIndex).localIdentifier
+        let localID: String?
+        if !cachedAssets.isEmpty, selectedIndex < cachedAssets.count {
+            localID = cachedAssets[selectedIndex].localIdentifier
+        } else if selectedIndex < assets.count {
+            localID = assets.object(at: selectedIndex).localIdentifier
+        } else {
+            localID = nil
+        }
+        guard let id = localID else {
+            currentAsset = nil
+            currentIsFavorite = false
+            return
+        }
         let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
         currentAsset = result.firstObject
         currentIsFavorite = result.firstObject?.isFavorite ?? false
+    }
+
+    private func toggleChrome() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showChrome.toggle()
+            if !showChrome { showInfoPanel = false }
+        }
+    }
+
+    private static func buildAssetList(assets: PHFetchResult<PHAsset>) -> [PHAsset] {
+        var result: [PHAsset] = []
+        result.reserveCapacity(assets.count)
+        for i in 0..<assets.count {
+            result.append(assets.object(at: i))
+        }
+        return result
     }
 
     private func openPhotosApp() {

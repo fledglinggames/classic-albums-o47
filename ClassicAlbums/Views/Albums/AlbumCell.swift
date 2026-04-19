@@ -35,13 +35,17 @@ struct AlbumCell: View {
         }
         .frame(width: thumbnailSize, alignment: .leading)
         .task(id: "\(album.id):\(photoLibrary.libraryChangeCount)") {
+            guard let cover = ImageService.shared.albumCoverAsset(for: album) else {
+                image = nil
+                return
+            }
             let scale = UIScreen.main.scale
             let px = thumbnailSize * scale
-            let loaded = await ThumbnailCache.shared.image(
-                for: album,
-                size: CGSize(width: px, height: px)
-            )
-            image = loaded
+            let target = CGSize(width: px, height: px)
+            for await loaded in ImageService.shared.requestThumbnail(for: cover, targetSize: target) {
+                if Task.isCancelled { return }
+                image = loaded
+            }
         }
     }
 

@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(PhotoLibraryManager.self) private var photoLibrary
     @State private var showingResetConfirm = false
     @AppStorage("pixelArtCrispThreshold") private var pixelArtCrispThreshold: Int = 256
+    @AppStorage("fullResIndicatorStyle") private var fullResIndicatorStyle: String = "off"
 
     var body: some View {
         NavigationStack {
@@ -14,6 +15,15 @@ struct SettingsView: View {
                         Text("256×256 or smaller").tag(256)
                         Text("128×128 or smaller").tag(128)
                         Text("Off").tag(0)
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+
+                Section("Full Image: Top Right Indicator") {
+                    Picker("Style", selection: $fullResIndicatorStyle) {
+                        Text("Light Gray Square").tag("lightGraySquare")
+                        Text("Off").tag("off")
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()

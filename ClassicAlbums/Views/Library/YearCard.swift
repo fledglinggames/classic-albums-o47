@@ -34,10 +34,11 @@ struct YearCard: View {
                 let scale = UIScreen.main.scale
                 let targetHeight = cardHeight * scale
                 let targetWidth = UIScreen.main.bounds.width * scale
-                image = await ThumbnailCache.shared.image(
-                    for: cover,
-                    size: CGSize(width: targetWidth, height: targetHeight)
-                )
+                let target = CGSize(width: targetWidth, height: targetHeight)
+                for await loaded in ImageService.shared.requestThumbnail(for: cover, targetSize: target) {
+                    if Task.isCancelled { return }
+                    image = loaded
+                }
             }
     }
 

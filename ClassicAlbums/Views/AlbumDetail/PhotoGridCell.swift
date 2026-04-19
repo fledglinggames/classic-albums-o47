@@ -1,12 +1,12 @@
 import SwiftUI
 import Photos
 
-struct PhotoGridCell: View {
+struct PhotoGridCellView: View {
     let asset: PHAsset
+    let image: UIImage?
     let size: CGFloat
     var isSelecting: Bool = false
     var isSelected: Bool = false
-    @State private var image: UIImage?
 
     var body: some View {
         ZStack {
@@ -46,14 +46,6 @@ struct PhotoGridCell: View {
         }
         .scaleEffect(isSelecting && isSelected ? 0.92 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: isSelected)
-        .task(id: asset.localIdentifier) {
-            let scale = UIScreen.main.scale
-            let px = size * scale
-            image = await ThumbnailCache.shared.image(
-                for: asset,
-                size: CGSize(width: px, height: px)
-            )
-        }
     }
 
     @ViewBuilder

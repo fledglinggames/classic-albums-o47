@@ -66,7 +66,7 @@ struct PhotoPickerView: View {
                         Button {
                             toggle(asset)
                         } label: {
-                            PhotoGridCell(asset: asset, size: cellSize)
+                            PickerCell(asset: asset, size: cellSize)
                                 .overlay(alignment: .bottomTrailing) {
                                     selectionBadge(selected: selected.contains(asset.localIdentifier))
                                         .padding(6)
@@ -112,6 +112,24 @@ struct PhotoPickerView: View {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         return PHAsset.fetchAssets(in: collection, options: options)
+    }
+
+    private struct PickerCell: View {
+        let asset: PHAsset
+        let size: CGFloat
+        @State private var image: UIImage?
+
+        var body: some View {
+            PhotoGridCellView(asset: asset, image: image, size: size)
+                .task(id: asset.localIdentifier) {
+                    let scale = UIScreen.main.scale
+                    let target = CGSize(width: size * scale, height: size * scale)
+                    for await img in ImageService.shared.requestThumbnail(for: asset, targetSize: target) {
+                        if Task.isCancelled { return }
+                        image = img
+                    }
+                }
+        }
     }
 
     private func add() {

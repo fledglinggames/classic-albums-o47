@@ -24,8 +24,11 @@ targets:
       - path: ClassicAlbums/Resources/Assets.xcassets
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.classicalbums.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.fledglinggames.classicphotos
         PRODUCT_NAME: ClassicAlbums
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "2"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.photography"
         INFOPLIST_KEY_CFBundleDisplayName: "Classic Albums"
         INFOPLIST_KEY_UILaunchStoryboardName: "LaunchScreen"
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: "YES"

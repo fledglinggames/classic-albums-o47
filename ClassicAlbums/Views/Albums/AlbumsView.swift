@@ -54,7 +54,6 @@ struct AlbumsView: View {
             }
         }
         .onChange(of: photoLibrary.libraryChangeCount) { _, _ in
-            ThumbnailCache.shared.invalidateAlbumCovers()
             photoLibrary.fetchAlbums()
         }
     }
